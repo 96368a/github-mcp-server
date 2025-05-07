@@ -186,6 +186,149 @@ func Test_GetFileContents(t *testing.T) {
 	}
 }
 
+func Test_ListReleases(t *testing.T) {
+	// 验证工具定义
+	mockClient := github.NewClient(nil)
+	tool, _ := ListReleases(stubGetClientFn(mockClient), translations.NullTranslationHelper)
+
+	assert.Equal(t, "list_releases", tool.Name)
+	assert.NotEmpty(t, tool.Description)
+	assert.Contains(t, tool.InputSchema.Properties, "owner")
+	assert.Contains(t, tool.InputSchema.Properties, "repo")
+	assert.ElementsMatch(t, tool.InputSchema.Required, []string{"owner", "repo"})
+
+	// 设置模拟发布数据
+	mockReleases := []*github.RepositoryRelease{
+		{
+			ID:          github.Ptr(int64(1)),
+			Name:        github.Ptr("v1.0.0"),
+			TagName:     github.Ptr("v1.0.0"),
+			Body:        github.Ptr("First stable release"),
+			Draft:       github.Ptr(false),
+			Prerelease:  github.Ptr(false),
+			PublishedAt: &github.Timestamp{Time: time.Now()},
+		},
+		{
+			ID:          github.Ptr(int64(2)),
+			Name:        github.Ptr("v1.1.0-beta"),
+			TagName:     github.Ptr("v1.1.0-beta"),
+			Body:        github.Ptr("Beta release"),
+			Draft:       github.Ptr(false),
+			Prerelease:  github.Ptr(true),
+			PublishedAt: &github.Timestamp{Time: time.Now()},
+		},
+	}
+
+	tests := []struct {
+		name           string
+		mockedClient   *http.Client
+		requestArgs    map[string]interface{}
+		expectError    bool
+		expectedResult []*github.RepositoryRelease
+		expectedErrMsg string
+	}{
+		{
+			name: "成功获取发布列表",
+			mockedClient: mock.NewMockedHTTPClient(
+				mock.WithRequestMatchHandler(
+					mock.GetReposReleasesByOwnerByRepo,
+					expectQueryParams(t, map[string]string{
+						"page":     "1",
+						"per_page": "30",
+					}).andThen(
+						mockResponse(t, http.StatusOK, mockReleases),
+					),
+				),
+			),
+			requestArgs: map[string]interface{}{
+				"owner": "owner",
+				"repo":  "repo",
+				"page":  1,
+			},
+			expectError:    false,
+			expectedResult: mockReleases,
+		},
+		{
+			name:         "缺少必需参数",
+			mockedClient: mock.NewMockedHTTPClient(),
+			requestArgs: map[string]interface{}{
+				"owner": "owner",
+			},
+			expectError:    true,
+			expectedErrMsg: "repo is required",
+		},
+		{
+			name: "API请求失败",
+			mockedClient: mock.NewMockedHTTPClient(
+				mock.WithRequestMatchHandler(
+					mock.GetReposReleasesByOwnerByRepo,
+					http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+						w.WriteHeader(http.StatusNotFound)
+						_, _ = w.Write([]byte(`{"message": "Not Found"}`))
+					}),
+				),
+			),
+			requestArgs: map[string]interface{}{
+				"owner": "owner",
+				"repo":  "nonexistent",
+			},
+			expectError:    true,
+			expectedErrMsg: "failed to list releases",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			// 设置带有mock的客户端
+			client := github.NewClient(tc.mockedClient)
+			_, handler := ListReleases(stubGetClientFn(client), translations.NullTranslationHelper)
+
+			// 创建调用请求
+			request := mcp.CallToolRequest{
+				Params: struct {
+					Name      string                 `json:"name"`
+					Arguments map[string]interface{} `json:"arguments,omitempty"`
+					Meta      *struct {
+						ProgressToken mcp.ProgressToken `json:"progressToken,omitempty"`
+					} `json:"_meta,omitempty"`
+				}{
+					Arguments: tc.requestArgs,
+				},
+			}
+
+			// 调用处理程序
+			result, err := handler(context.Background(), request)
+
+			// 验证结果
+			if tc.expectError {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tc.expectedErrMsg)
+				return
+			}
+
+			require.NoError(t, err)
+
+			// 解析结果并获取文本内容
+			textContent := getTextResult(t, result)
+
+			// 验证返回的发布列表
+			var returnedReleases []*github.RepositoryRelease
+			err = json.Unmarshal([]byte(textContent.Text), &returnedReleases)
+			require.NoError(t, err)
+
+			assert.Len(t, returnedReleases, len(tc.expectedResult))
+			for i, release := range returnedReleases {
+				assert.Equal(t, *tc.expectedResult[i].ID, *release.ID)
+				assert.Equal(t, *tc.expectedResult[i].Name, *release.Name)
+				assert.Equal(t, *tc.expectedResult[i].TagName, *release.TagName)
+				assert.Equal(t, *tc.expectedResult[i].Body, *release.Body)
+				assert.Equal(t, *tc.expectedResult[i].Draft, *release.Draft)
+				assert.Equal(t, *tc.expectedResult[i].Prerelease, *release.Prerelease)
+			}
+		})
+	}
+}
+
 func Test_ForkRepository(t *testing.T) {
 	// Verify tool definition once
 	mockClient := github.NewClient(nil)
