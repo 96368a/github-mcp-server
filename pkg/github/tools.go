@@ -29,7 +29,6 @@ func InitToolsets(passedToolsets []string, readOnly bool, getClient GetClientFn,
 			toolsets.NewServerTool(ListBranches(getClient, t)),
 			toolsets.NewServerTool(ListTags(getClient, t)),
 			toolsets.NewServerTool(GetTag(getClient, t)),
-			toolsets.NewServerTool(ListReleases(getClient, t)),
 		).
 		AddWriteTools(
 			toolsets.NewServerTool(CreateOrUpdateFile(getClient, t)),
@@ -84,6 +83,14 @@ func InitToolsets(passedToolsets []string, readOnly bool, getClient GetClientFn,
 	// Keep experiments alive so the system doesn't error out when it's always enabled
 	experiments := toolsets.NewToolset("experiments", "Experimental features that are not considered stable yet")
 
+	// Create a new customs toolset
+	customs := toolsets.NewToolset("customs", "Custom GitHub tools for specialized operations").
+		AddReadTools(
+			toolsets.NewServerTool(ListReleases(getClient, t)),
+			toolsets.NewServerTool(GetRepository(getClient, t)),
+			toolsets.NewServerTool(GetReadme(getClient, t)),
+		)
+
 	// Add toolsets to the group
 	tsg.AddToolset(repos)
 	tsg.AddToolset(issues)
@@ -92,6 +99,7 @@ func InitToolsets(passedToolsets []string, readOnly bool, getClient GetClientFn,
 	tsg.AddToolset(codeSecurity)
 	tsg.AddToolset(secretProtection)
 	tsg.AddToolset(experiments)
+	tsg.AddToolset(customs)
 	// Enable the requested features
 
 	if err := tsg.EnableToolsets(passedToolsets); err != nil {
